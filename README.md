@@ -1,1 +1,1 @@
-
+Optimized version of XMRIG
