@@ -100,13 +100,23 @@ jobs:
           git sparse-checkout set --no-cone msvc2022/x64
           git checkout master
 
+      - name: Set up MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Set up Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v4
+
       # xmrig-deps does not ship a prebuilt hwloc for MSVC, so NUMA support
-      # is disabled for the Windows build.
+      # is disabled for the Windows build. Ninja + msvc-dev-cmd is used
+      # instead of the "Visual Studio 17 2022" generator because CMake's
+      # own VS-instance auto-detection is unreliable on hosted runners.
       - name: Configure
-        run: cmake . -G "Visual Studio 17 2022" -A x64 -DXMRIG_DEPS="${{ github.workspace }}\deps-repo\msvc2022\x64" -DWITH_HWLOC=OFF
+        run: cmake . -G Ninja -DCMAKE_BUILD_TYPE=Release -DXMRIG_DEPS="${{ github.workspace }}\deps-repo\msvc2022\x64" -DWITH_HWLOC=OFF
 
       - name: Build
-        run: cmake --build . --config Release
+        run: cmake --build .
 
       - name: Package
         shell: bash
@@ -114,9 +124,9 @@ jobs:
           version="${GITHUB_REF_NAME}"
           dist="xmrig-${version}-msvc-win64"
           mkdir "$dist"
-          cp Release/xmrig.exe LICENSE README.md "$dist"/
-          cp Release/*.cmd "$dist"/ 2>/dev/null || true
-          if [ -f Release/WinRing0x64.sys ]; then cp Release/WinRing0x64.sys "$dist"/; fi
+          cp xmrig.exe LICENSE README.md "$dist"/
+          cp *.cmd "$dist"/ 2>/dev/null || true
+          if [ -f WinRing0x64.sys ]; then cp WinRing0x64.sys "$dist"/; fi
           7z a "${dist}.zip" "$dist"
 
       - uses: actions/upload-artifact@v4
