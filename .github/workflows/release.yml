@@ -1,0 +1,140 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential cmake automake libtool autoconf wget
+
+      - name: Cache dependencies
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: scripts/deps
+          key: deps-linux-x64-${{ hashFiles('scripts/build.uv.sh', 'scripts/build.hwloc.sh', 'scripts/build.openssl3.sh') }}
+
+      - name: Build dependencies (libuv, hwloc, openssl)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        working-directory: scripts
+        run: ./build_deps.sh
+
+      - name: Configure
+        run: cmake . -DXMRIG_DEPS=scripts/deps -DBUILD_STATIC=ON -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build . --config Release -j$(nproc)
+
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME}"
+          dist="xmrig-${version}-linux-static-x64"
+          mkdir "$dist"
+          cp xmrig LICENSE README.md "$dist"/
+          tar -czf "${dist}.tar.gz" "$dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: xmrig-*-linux-static-x64.tar.gz
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: brew install automake libtool autoconf wget
+
+      - name: Cache dependencies
+        id: deps-cache
+        uses: actions/cache@v4
+        with:
+          path: scripts/deps
+          key: deps-macos-x64-${{ hashFiles('scripts/build.uv.sh', 'scripts/build.hwloc.sh', 'scripts/build.openssl3.sh') }}
+
+      - name: Build dependencies (libuv, hwloc, openssl)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        working-directory: scripts
+        run: ./build_deps.sh
+
+      - name: Configure
+        run: cmake . -DXMRIG_DEPS=scripts/deps -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build . --config Release -j$(sysctl -n hw.ncpu)
+
+      - name: Package
+        run: |
+          version="${GITHUB_REF_NAME}"
+          dist="xmrig-${version}-macos-x64"
+          mkdir "$dist"
+          cp xmrig LICENSE README.md "$dist"/
+          tar -czf "${dist}.tar.gz" "$dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-x64
+          path: xmrig-*-macos-x64.tar.gz
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch prebuilt Windows dependencies (xmrig-deps)
+        shell: bash
+        run: |
+          git clone --filter=blob:none --no-checkout --depth 1 https://github.com/xmrig/xmrig-deps.git deps-repo
+          cd deps-repo
+          git sparse-checkout set --no-cone msvc2022/x64
+          git checkout master
+
+      # xmrig-deps does not ship a prebuilt hwloc for MSVC, so NUMA support
+      # is disabled for the Windows build.
+      - name: Configure
+        run: cmake . -G "Visual Studio 17 2022" -A x64 -DXMRIG_DEPS="${{ github.workspace }}\deps-repo\msvc2022\x64" -DWITH_HWLOC=OFF
+
+      - name: Build
+        run: cmake --build . --config Release
+
+      - name: Package
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME}"
+          dist="xmrig-${version}-msvc-win64"
+          mkdir "$dist"
+          cp Release/xmrig.exe LICENSE README.md "$dist"/
+          cp Release/*.cmd "$dist"/ 2>/dev/null || true
+          if [ -f Release/WinRing0x64.sys ]; then cp Release/WinRing0x64.sys "$dist"/; fi
+          7z a "${dist}.zip" "$dist"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: xmrig-*-msvc-win64.zip
+
+  release:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*/*
+          generate_release_notes: true
+          draft: false
